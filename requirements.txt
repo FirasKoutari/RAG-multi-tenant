@@ -1,0 +1,15 @@
+fastapi==0.115.8
+uvicorn[standard]==0.30.6
+pydantic==2.10.6
+scikit-learn==1.5.2
+numpy==2.1.3
+streamlit==1.41.1
+requests==2.32.3
+pytest==8.3.4
+httpx==0.28.1
+# LLM local avec Ollama
+ollama==0.4.4
+# Base de données SQLite
+sqlalchemy==2.0.36
+alembic==1.14.0
+python-dotenv==1.0.1
