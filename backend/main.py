@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 from datetime import datetime
-from fastapi import FastAPI, Header, HTTPException, Depends
+from fastapi import FastAPI, Header, HTTPException, Depends, UploadFile, File
 from pydantic import BaseModel, Field
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -11,20 +11,11 @@ from sqlalchemy.orm import Session
 from .tenants import resolve_tenant
 from .search import MultiTenantSearch, build_llm_answer
 from .database import get_db, init_db
-from .models import QueryLog, APIKeyUsage
+from .models import QueryLog, APIKeyUsage, TenantDocument
 
-# 🔒 SÉCURITÉ MULTI-TENANT: Architecture d'isolation stricte
-# ----------------------------------------------------------------
-# Chaque tenant (client) a:
-# 1. Son propre répertoire de documents: data/tenantA/, data/tenantB/
-# 2. Son propre index TF-IDF (vectorizer + matrice entièrement séparés)
-# 3. Son propre espace mémoire (pas de vocabulaire partagé)
-#
-# ✅ Zéro fuite garanti: TenantA ne peut physiquement pas accéder aux docs de TenantB
-# ----------------------------------------------------------------
 
 APP_DIR = os.path.dirname(__file__)
-DATA_DIR = os.path.join(APP_DIR, "data")  # backend/data/<tenant_id>/*.txt
+DATA_DIR = os.path.join(APP_DIR, "data")  
 
 search_engine = MultiTenantSearch(base_dir=DATA_DIR)
 # Preload the two tenants (optional, but nice for faster first request)
@@ -273,3 +264,117 @@ def query(
         no_answer=False,
         llm_used=llm_used,
     )
+
+
+@app.post("/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    x_api_key: str | None = Header(None, alias="X-API-KEY"),
+    db: Session = Depends(get_db)
+):
+    """
+    📤 Upload d'un document .txt pour un tenant.
+    
+    Le fichier est:
+    1. Sauvegardé dans backend/data/{tenant_id}/{filename}
+    2. Enregistré dans la table tenant_documents
+    3. Automatiquement réindexé pour recherche sémantique
+    
+    Authentification: Header X-API-KEY requis
+    Format accepté: .txt uniquement
+    """
+    # 🔐 Étape 1: Authentification
+    tenant = resolve_tenant(x_api_key)
+    if not tenant:
+        raise HTTPException(status_code=401, detail="Invalid or missing X-API-KEY")
+    
+    tenant_id = tenant.id
+    
+    # 📄 Étape 2: Validation du fichier
+    if not file.filename.endswith('.txt'):
+        raise HTTPException(
+            status_code=400,
+            detail="Only .txt files are accepted"
+        )
+    
+    # 📁 Étape 3: Création du répertoire tenant si nécessaire
+    tenant_dir = os.path.join(DATA_DIR, tenant_id)
+    os.makedirs(tenant_dir, exist_ok=True)
+    
+    # 💾 Étape 4: Sauvegarde du fichier
+    file_path = os.path.join(tenant_dir, file.filename)
+    
+    # Lire le contenu du fichier
+    content = await file.read()
+    
+    # Vérifier que le contenu n'est pas vide
+    if not content or len(content.strip()) == 0:
+        raise HTTPException(
+            status_code=400,
+            detail="File is empty"
+        )
+    
+    # Sauvegarder le fichier
+    with open(file_path, "wb") as f:
+        f.write(content)
+    
+    # 🗄️ Étape 5: Enregistrement dans la base de données
+    # Vérifier si le document existe déjà
+    existing_doc = db.query(TenantDocument).filter(
+        TenantDocument.tenant_id == tenant_id,
+        TenantDocument.doc_id == file.filename
+    ).first()
+    
+    if existing_doc:
+        # Mettre à jour le document existant
+        existing_doc.updated_at = datetime.utcnow()
+        existing_doc.chunks_count = 0  # Sera recalculé lors de la réindexation
+    else:
+        # Créer une nouvelle entrée
+        new_doc = TenantDocument(
+            tenant_id=tenant_id,
+            doc_id=file.filename,
+            doc_path=file_path,
+            chunks_count=0,  # Sera calculé lors de la réindexation
+            indexed_at=datetime.utcnow()
+        )
+        db.add(new_doc)
+    
+    db.commit()
+    
+    # 🔄 Étape 6: Réindexation du tenant
+    try:
+        search_engine.reload_tenant(tenant_id)
+        
+        # Calculer le nombre de chunks pour ce document
+        chunks_count = 0
+        tenant_index = search_engine.get_tenant_index(tenant_id)
+        if tenant_index:
+            chunks_count = sum(
+                1 for chunk in tenant_index.chunks
+                if chunk.doc_id == file.filename
+            )
+        
+        # Mettre à jour le nombre de chunks
+        doc = db.query(TenantDocument).filter(
+            TenantDocument.tenant_id == tenant_id,
+            TenantDocument.doc_id == file.filename
+        ).first()
+        if doc:
+            doc.chunks_count = chunks_count
+            db.commit()
+        
+        return {
+            "status": "success",
+            "message": f"Document '{file.filename}' uploaded and indexed successfully",
+            "tenant_id": tenant_id,
+            "filename": file.filename,
+            "chunks_count": chunks_count,
+            "file_size_bytes": len(content)
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Upload successful but indexing failed: {str(e)}"
+        )
+

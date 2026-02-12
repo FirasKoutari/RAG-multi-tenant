@@ -228,10 +228,20 @@ class MultiTenantSearch:
         tenant_dir = os.path.join(self.base_dir, tenant_id)
         self.indexes[tenant_id] = TenantIndex(tenant_id=tenant_id, tenant_dir=tenant_dir)
 
+    def reload_tenant(self, tenant_id: str) -> None:
+        """Recharge l'index d'un tenant (après ajout/modification de documents)."""
+        tenant_dir = os.path.join(self.base_dir, tenant_id)
+        self.indexes[tenant_id] = TenantIndex(tenant_id=tenant_id, tenant_dir=tenant_dir)
+        print(f"🔄 Index rechargé pour {tenant_id}")
+
     def get(self, tenant_id: str) -> TenantIndex:
         if tenant_id not in self.indexes:
             self.load_tenant(tenant_id)
         return self.indexes[tenant_id]
+    
+    def get_tenant_index(self, tenant_id: str) -> TenantIndex | None:
+        """Retourne l'index d'un tenant s'il existe, sinon None."""
+        return self.indexes.get(tenant_id)
 
 def build_extractive_answer(hits: list[SearchHit]) -> str:
     """Construit une réponse strictement extractive (anti-hallucination).

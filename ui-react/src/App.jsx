@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import QueryForm from './components/QueryForm';
 import QueryResults from './components/QueryResults';
 import ErrorMessage from './components/ErrorMessage';
+import UploadDocument from './components/UploadDocument';
 import { queryDocuments, checkHealth } from './services/api';
 import './App.css';
 
@@ -11,7 +12,8 @@ import './App.css';
  * Architecture:
  * - Frontend React communique avec Backend FastAPI
  * - Isolation multi-tenant via header X-API-KEY
- * - Recherche TF-IDF avec réponse extractive
+ * - Recherche sémantique avec embeddings Mistral
+ * - Upload de documents par tenant
  * - Sources toujours citées pour traçabilité
  */
 function App() {
@@ -19,6 +21,7 @@ function App() {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [backendStatus, setBackendStatus] = useState(null);
+  const [activeTab, setActiveTab] = useState('search'); // 'search' ou 'upload'
 
   // Vérification de l'état du backend au chargement
   useEffect(() => {
@@ -78,14 +81,40 @@ function App() {
       </header>
 
       <div className="container">
-        {/* Formulaire de recherche */}
-        <QueryForm onSubmit={handleQuery} loading={loading} />
+        {/* Onglets de navigation */}
+        <div className="tabs-container">
+          <button
+            className={`tab ${activeTab === 'search' ? 'active' : ''}`}
+            onClick={() => setActiveTab('search')}
+          >
+            🔍 Recherche Documentaire
+          </button>
+          <button
+            className={`tab ${activeTab === 'upload' ? 'active' : ''}`}
+            onClick={() => setActiveTab('upload')}
+          >
+            📤 Téléverser un Document
+          </button>
+        </div>
 
-        {/* Affichage des erreurs */}
-        <ErrorMessage error={error} onDismiss={() => setError(null)} />
+        {/* Contenu selon l'onglet actif */}
+        {activeTab === 'search' ? (
+          <>
+            {/* Formulaire de recherche */}
+            <QueryForm onSubmit={handleQuery} loading={loading} />
 
-        {/* Affichage des résultats */}
-        <QueryResults result={result} />
+            {/* Affichage des erreurs */}
+            <ErrorMessage error={error} onDismiss={() => setError(null)} />
+
+            {/* Affichage des résultats */}
+            <QueryResults result={result} />
+          </>
+        ) : (
+          <>
+            {/* Composant d'upload */}
+            <UploadDocument />
+          </>
+        )}
 
         {/* Footer */}
         <footer className="app-footer">
